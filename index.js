@@ -3,6 +3,19 @@ const express = require('express');
 const os = require('os');
 const app = express();
 
+// SMPP 状态码映射
+const SMPP_STATUS_CODES = {
+    0: 'ESME_ROK (No Error)',
+    1: 'ESME_RINVMSGLEN (Message Length is invalid)',
+    2: 'ESME_RINVCMDLEN (Command Length is invalid)',
+    3: 'ESME_RINVCMDID (Invalid Command ID)',
+    4: 'ESME_RINVBNDSTS (Incorrect BIND Status for given command)',
+    5: 'ESME_RALYBND (ESME Already in Bound State)',
+    8: 'ESME_RINVSRCADR (Invalid Source Address)',
+    0x0A: 'ESME_RINVPASWD (Invalid Password)',
+    0x0B: 'ESME_RINVSYSID (Invalid System ID)',
+};
+
 // 配置 SMPP 连接参数
 const smppConfig = {
     host: '165.84.188.148',
@@ -16,7 +29,15 @@ let session = null;
 
 // 连接 SMPP 服务器
 function connectSMPP() {
-    console.log('准备连接到 SMPP 服务器，参数:', smppConfig);
+    console.log('=== SMPP 连接初始化 ===');
+    console.log('连接参数详情:');
+    console.log('- 主机:', smppConfig.host);
+    console.log('- 端口:', smppConfig.port);
+    console.log('- 系统ID:', smppConfig.systemId);
+    console.log('- 密码长度:', smppConfig.password.length);
+    console.log('- 密码前两位:', smppConfig.password.substring(0, 2));
+    console.log('==================');
+
     session = smpp.connect({
         url: `smpp://${smppConfig.host}:${smppConfig.port}`,
         auto_enquire_link_period: 10000,
@@ -24,28 +45,68 @@ function connectSMPP() {
     });
 
     session.on('connect', () => {
-        console.log('已连接到 SMPP 服务器');
-        session.bind_transceiver({
+        console.log('=== SMPP TCP连接已建立 ===');
+        console.log('准备进行SMPP绑定...');
+        
+        const bindParams = {
             system_id: smppConfig.systemId,
-            password: smppConfig.password
-        }, (pdu) => {
-            console.log('bind_transceiver 回调:', pdu);
-            if (pdu.command_status === 0) {
+            password: smppConfig.password,
+            system_type: '',  // 可选参数
+            interface_version: 0x34,  // SMPP 3.4
+            addr_ton: 0,  // Type of Number
+            addr_npi: 0,  // Numbering Plan Indicator
+            address_range: ''  // 可选参数
+        };
+        
+        console.log('绑定参数:', JSON.stringify(bindParams, null, 2));
+        
+        session.bind_transceiver(bindParams, (pdu) => {
+            console.log('=== 收到绑定响应 ===');
+            console.log('完整PDU内容:', JSON.stringify(pdu, null, 2));
+            
+            const statusCode = pdu.command_status;
+            const statusMessage = SMPP_STATUS_CODES[statusCode] || `未知状态码: ${statusCode}`;
+            
+            if (statusCode === 0) {
                 console.log('SMPP 绑定成功');
+                console.log('- 服务器分配的系统ID:', pdu.system_id);
             } else {
-                console.error('SMPP 绑定失败:', pdu.command_status);
+                console.error('SMPP 绑定失败');
+                console.error('- 错误状态码:', statusCode);
+                console.error('- 错误描述:', statusMessage);
+                console.error('- 服务器返回的系统ID:', pdu.system_id);
+                console.error('- 命令ID:', pdu.command_id);
+                console.error('- 序列号:', pdu.sequence_number);
             }
+            console.log('==================');
         });
     });
 
     session.on('error', (error) => {
-        console.error('SMPP 连接错误:', error);
+        console.error('=== SMPP 错误事件 ===');
+        console.error('错误详情:', error);
+        console.error('错误堆栈:', error.stack);
+        console.error('==================');
     });
 
     session.on('close', () => {
-        console.log('SMPP 连接已关闭');
-        // 尝试重新连接
+        console.log('=== SMPP 连接关闭 ===');
+        console.log('准备在5秒后重新连接...');
+        console.log('==================');
         setTimeout(connectSMPP, 5000);
+    });
+    
+    // 添加更多事件监听
+    session.on('unknown', (pdu) => {
+        console.log('=== 收到未知PDU ===');
+        console.log('PDU详情:', JSON.stringify(pdu, null, 2));
+        console.log('==================');
+    });
+    
+    session.on('enquire_link', (pdu) => {
+        console.log('=== 收到enquire_link请求 ===');
+        console.log('PDU详情:', JSON.stringify(pdu, null, 2));
+        console.log('==================');
     });
 }
 
