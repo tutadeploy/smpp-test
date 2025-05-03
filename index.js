@@ -26,6 +26,24 @@ const smppConfig = {
 
 // 创建 SMPP 会话
 let session = null;
+let bindRetryCount = 0;
+const MAX_BIND_RETRIES = 3;
+
+// 尝试不同的绑定类型
+const BIND_TYPES = ['transmitter', 'receiver', 'transceiver'];
+let currentBindTypeIndex = 0;
+
+// 清理会话
+function cleanupSession() {
+    if (session) {
+        try {
+            console.log('=== 发送 unbind 请求 ===');
+            session.unbind();
+        } catch (error) {
+            console.error('Unbind 错误:', error);
+        }
+    }
+}
 
 // 连接 SMPP 服务器
 function connectSMPP() {
@@ -38,6 +56,9 @@ function connectSMPP() {
     console.log('- 密码前两位:', smppConfig.password.substring(0, 2));
     console.log('==================');
 
+    // 清理之前的会话
+    cleanupSession();
+
     session = smpp.connect({
         url: `smpp://${smppConfig.host}:${smppConfig.port}`,
         auto_enquire_link_period: 10000,
@@ -46,40 +67,7 @@ function connectSMPP() {
 
     session.on('connect', () => {
         console.log('=== SMPP TCP连接已建立 ===');
-        console.log('准备进行SMPP绑定...');
-        
-        const bindParams = {
-            system_id: smppConfig.systemId,
-            password: smppConfig.password,
-            system_type: '',  // 可选参数
-            interface_version: 0x34,  // SMPP 3.4
-            addr_ton: 0,  // Type of Number
-            addr_npi: 0,  // Numbering Plan Indicator
-            address_range: ''  // 可选参数
-        };
-        
-        console.log('绑定参数:', JSON.stringify(bindParams, null, 2));
-        
-        session.bind_transceiver(bindParams, (pdu) => {
-            console.log('=== 收到绑定响应 ===');
-            console.log('完整PDU内容:', JSON.stringify(pdu, null, 2));
-            
-            const statusCode = pdu.command_status;
-            const statusMessage = SMPP_STATUS_CODES[statusCode] || `未知状态码: ${statusCode}`;
-            
-            if (statusCode === 0) {
-                console.log('SMPP 绑定成功');
-                console.log('- 服务器分配的系统ID:', pdu.system_id);
-            } else {
-                console.error('SMPP 绑定失败');
-                console.error('- 错误状态码:', statusCode);
-                console.error('- 错误描述:', statusMessage);
-                console.error('- 服务器返回的系统ID:', pdu.system_id);
-                console.error('- 命令ID:', pdu.command_id);
-                console.error('- 序列号:', pdu.sequence_number);
-            }
-            console.log('==================');
-        });
+        tryBind();
     });
 
     session.on('error', (error) => {
@@ -96,7 +84,6 @@ function connectSMPP() {
         setTimeout(connectSMPP, 5000);
     });
     
-    // 添加更多事件监听
     session.on('unknown', (pdu) => {
         console.log('=== 收到未知PDU ===');
         console.log('PDU详情:', JSON.stringify(pdu, null, 2));
@@ -106,6 +93,67 @@ function connectSMPP() {
     session.on('enquire_link', (pdu) => {
         console.log('=== 收到enquire_link请求 ===');
         console.log('PDU详情:', JSON.stringify(pdu, null, 2));
+        console.log('==================');
+    });
+
+    // 添加 unbind 事件处理
+    session.on('unbind', (pdu) => {
+        console.log('=== 收到 unbind 请求 ===');
+        console.log('PDU详情:', JSON.stringify(pdu, null, 2));
+        console.log('==================');
+    });
+}
+
+// 尝试不同的绑定类型
+function tryBind() {
+    const bindType = BIND_TYPES[currentBindTypeIndex];
+    console.log(`尝试绑定类型: ${bindType} (尝试次数: ${bindRetryCount + 1})`);
+
+    const bindParams = {
+        system_id: smppConfig.systemId,
+        password: smppConfig.password,
+        system_type: '',
+        interface_version: 0x33,  // 尝试 SMPP 3.3
+        addr_ton: 0,
+        addr_npi: 0,
+        address_range: ''
+    };
+
+    console.log('绑定参数:', JSON.stringify(bindParams, null, 2));
+
+    const bindFunction = session[`bind_${bindType}`].bind(session);
+    
+    bindFunction(bindParams, (pdu) => {
+        console.log('=== 收到绑定响应 ===');
+        console.log('完整PDU内容:', JSON.stringify(pdu, null, 2));
+        
+        const statusCode = pdu.command_status;
+        const statusMessage = SMPP_STATUS_CODES[statusCode] || `未知状态码: ${statusCode}`;
+        
+        if (statusCode === 0) {
+            console.log('SMPP 绑定成功');
+            console.log('- 绑定类型:', bindType);
+            console.log('- 服务器分配的系统ID:', pdu.system_id);
+            bindRetryCount = 0;
+            currentBindTypeIndex = 0;
+        } else {
+            console.error('SMPP 绑定失败');
+            console.error('- 错误状态码:', statusCode);
+            console.error('- 错误描述:', statusMessage);
+            console.error('- 服务器返回的系统ID:', pdu.system_id);
+            console.error('- 命令ID:', pdu.command_id);
+            console.error('- 序列号:', pdu.sequence_number);
+            
+            // 尝试下一个绑定类型或重试
+            bindRetryCount++;
+            if (bindRetryCount >= MAX_BIND_RETRIES) {
+                bindRetryCount = 0;
+                currentBindTypeIndex = (currentBindTypeIndex + 1) % BIND_TYPES.length;
+            }
+            
+            // 关闭连接，触发重连
+            session.close();
+        }
         console.log('==================');
     });
 }
