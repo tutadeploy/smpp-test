@@ -61,7 +61,7 @@ function connectSMPP() {
 
     session = smpp.connect({
         url: `smpp://${smppConfig.host}:${smppConfig.port}`,
-        auto_enquire_link_period: 10000,
+        auto_enquire_link_period: 30000,
         debug: true
     });
 
@@ -241,7 +241,7 @@ app.post('/send-sms', async (req, res) => {
 });
 
 // 启动服务器
-const PORT = 3000;
+const PORT = 13110;
 
 function getPublicIP() {
     const interfaces = os.networkInterfaces();
